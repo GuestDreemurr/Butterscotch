@@ -218,15 +218,21 @@ typedef struct {
 // for plain variable access.
 static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
     uint8_t varType = (varRef >> 24) & 0xFF;
-    if (varType == VARTYPE_ARRAY || varType == VARTYPE_STACKTOP) {
+    if (varType == VARTYPE_ARRAY) {
+        // For array reads, GMS pushes: instanceType then arrayIndex (arrayIndex on top)
         RValue indexVal = stackPop(&ctx->stack);
         int32_t arrayIndex = RValue_toInt32(indexVal);
         RValue_free(&indexVal);
-        if (varType == VARTYPE_STACKTOP) {
-            RValue stacktop = stackPop(&ctx->stack);
-            RValue_free(&stacktop);
-        }
+
+        RValue instTypeVal = stackPop(&ctx->stack);
+        RValue_free(&instTypeVal);
+
         return (ArrayAccess){ .arrayIndex = arrayIndex, .isArray = true };
+    }
+    if (varType == VARTYPE_STACKTOP) {
+        RValue stacktop = stackPop(&ctx->stack);
+        RValue_free(&stacktop);
+        return (ArrayAccess){ .arrayIndex = -1, .isArray = true };
     }
     return (ArrayAccess){ .arrayIndex = -1, .isArray = false };
 }
@@ -505,8 +511,25 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
     uint8_t type1 = instrType1(instr);   // destination type
     uint8_t type2 = instrType2(instr);   // source type (what's on stack)
     uint32_t varRef = resolveVarOperand(ctx, extraData);
+    uint8_t varType = (varRef >> 24) & 0xFF;
 
-    RValue val = stackPop(&ctx->stack);
+    RValue val;
+    int32_t arrayIndex = -1;
+
+    if (varType == VARTYPE_ARRAY) {
+        // For array writes, GMS pushes: value, instanceType, arrayIndex (arrayIndex on top)
+        RValue arrayIdxVal = stackPop(&ctx->stack);
+        arrayIndex = RValue_toInt32(arrayIdxVal);
+        RValue_free(&arrayIdxVal);
+
+        RValue instTypeVal = stackPop(&ctx->stack);
+        instanceType = (int16_t) RValue_toInt32(instTypeVal);
+        RValue_free(&instTypeVal);
+
+        val = stackPop(&ctx->stack);
+    } else {
+        val = stackPop(&ctx->stack);
+    }
 
     // Convert if source type differs from destination type
     if (type2 != type1 && type1 != GML_TYPE_VARIABLE) {
@@ -515,7 +538,31 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
         val = converted;
     }
 
-    resolveVariableWrite(ctx, instanceType, varRef, val);
+    if (varType == VARTYPE_ARRAY) {
+        Variable* varDef = resolveVarDef(ctx, varRef);
+        if (varDef->varID == -6) {
+            VMBuiltins_setVariable(ctx, varDef->name, val, arrayIndex);
+        } else {
+            switch (instanceType) {
+                case INSTANCE_LOCAL:
+                    arrayMapSet(&ctx->localArrayMap, varDef->varID, arrayIndex, val);
+                    break;
+                case INSTANCE_GLOBAL:
+                    arrayMapSet(&ctx->globalArrayMap, varDef->varID, arrayIndex, val);
+                    break;
+                case INSTANCE_SELF:
+                default: {
+                    struct Instance* inst = (struct Instance*) ctx->currentInstance;
+                    if (inst != nullptr) {
+                        arrayMapSet(&inst->selfArrayMap, varDef->varID, arrayIndex, val);
+                    }
+                    break;
+                }
+            }
+        }
+    } else {
+        resolveVariableWrite(ctx, instanceType, varRef, val);
+    }
 }
 
 static void handlePopz(VMContext* ctx) {

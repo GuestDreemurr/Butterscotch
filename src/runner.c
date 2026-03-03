@@ -237,6 +237,22 @@ void Runner_step(Runner* runner) {
     // Execute Begin Step for all instances
     Runner_executeEventForAll(runner, EVENT_STEP, STEP_BEGIN);
 
+    // Process alarms for all instances
+    int32_t alarmCount = (int32_t) arrlen(runner->instances);
+    repeat(alarmCount, i) {
+        Instance* inst = runner->instances[i];
+        if (inst == nullptr || !inst->active) continue;
+        repeat(GML_ALARM_COUNT, alarmIdx) {
+            if (inst->alarm[alarmIdx] > 0) {
+                inst->alarm[alarmIdx]--;
+                if (inst->alarm[alarmIdx] == 0) {
+                    inst->alarm[alarmIdx] = -1;
+                    Runner_executeEvent(runner, inst, EVENT_ALARM, alarmIdx);
+                }
+            }
+        }
+    }
+
     // Execute Normal Step for all instances
     Runner_executeEventForAll(runner, EVENT_STEP, STEP_NORMAL);
 
