@@ -7,23 +7,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "stb_ds.h"
 #include "stb_image_write.h"
 
 #include "../../utils.h"
 
 // ===[ COMMAND LINE ARGUMENTS ]===
 typedef struct {
+    int key;
+    // We need this dummy value, think that the ds_map is like a Java HashMap NOT a HashSet
+    // (Which is funny, because in Java HashSets are backed by HashMaps lol)
+    bool value;
+} FrameSetEntry;
+
+typedef struct {
     const char* dataWinPath;
     const char* screenshotPattern;
-    int* screenshotFrames;
-    int screenshotFrameCount;
-    int screenshotFrameCapacity;
+    FrameSetEntry* screenshotFrames;
     bool headless;
 } CommandLineArgs;
-
-static int CommandLineArgs_compareInts(const void* a, const void* b) {
-    return *(const int*) a - *(const int*) b;
-}
 
 static void CommandLineArgs_parse(CommandLineArgs* args, int argc, char* argv[]) {
     memset(args, 0, sizeof(CommandLineArgs));
@@ -34,6 +36,8 @@ static void CommandLineArgs_parse(CommandLineArgs* args, int argc, char* argv[])
         {"headless",            no_argument,       nullptr, 'h'},
         {nullptr,               0,                 nullptr,  0 }
     };
+
+    args->screenshotFrames = nullptr;
 
     int opt;
     while ((opt = getopt_long(argc, argv, "", longOptions, nullptr)) != -1) {
@@ -48,19 +52,8 @@ static void CommandLineArgs_parse(CommandLineArgs* args, int argc, char* argv[])
                     fprintf(stderr, "Error: Invalid frame number '%s'\n", optarg);
                     exit(1);
                 }
-                // Grow the dynamic array if needed
-                // We do it like this because the "f" case (which is used for the frame argument) may be called multiple times
-                if (args->screenshotFrameCount >= args->screenshotFrameCapacity) {
-                    int newCapacity = (args->screenshotFrameCapacity == 0) ? 8 : args->screenshotFrameCapacity * 2;
-                    int* newArray = realloc(args->screenshotFrames, newCapacity * sizeof(int));
-                    if (newArray == nullptr) {
-                        fprintf(stderr, "Error: Failed to allocate memory for screenshot frames\n");
-                        exit(1);
-                    }
-                    args->screenshotFrames = newArray;
-                    args->screenshotFrameCapacity = newCapacity;
-                }
-                args->screenshotFrames[args->screenshotFrameCount++] = (int) frame;
+
+                hmput(args->screenshotFrames, (int) frame, true);
                 break;
             }
             case 'h':
@@ -79,19 +72,14 @@ static void CommandLineArgs_parse(CommandLineArgs* args, int argc, char* argv[])
 
     args->dataWinPath = argv[optind];
 
-    if (args->screenshotFrameCount > 0 && args->screenshotPattern == nullptr) {
+    if (hmlen(args->screenshotFrames) > 0 && args->screenshotPattern == nullptr) {
         fprintf(stderr, "Error: --screenshot-at-frame requires --screenshot to be set\n");
         exit(1);
-    }
-
-    // Sort frames for efficient lookup in the main loop
-    if (args->screenshotFrameCount > 0) {
-        qsort(args->screenshotFrames, args->screenshotFrameCount, sizeof(int), CommandLineArgs_compareInts);
     }
 }
 
 static void CommandLineArgs_free(CommandLineArgs* args) {
-    free(args->screenshotFrames);
+    hmfree(args->screenshotFrames);
 }
 
 // ===[ SCREENSHOT ]===
@@ -168,23 +156,21 @@ int main(int argc, char* argv[]) {
 
     // Main loop
     int frameCount = 0;
-    int takenScreenshots = 0;
     while (!glfwWindowShouldClose(window)) {
         glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Capture screenshot if this frame matches the next requested frame
-        // This is a bit slow (because we are checking each frame and looping through all the screenshot checks), but it doesn't matter
-        int* frameToBeTaken;
-        forEach(frameToBeTaken, args.screenshotFrames, args.screenshotFrameCount) {
-            if (*frameToBeTaken == frameCount) {
-                Screenshot_capture(args.screenshotPattern, frameCount, (int) gen8->defaultWindowWidth, (int) gen8->defaultWindowHeight);
+        // Capture screenshot if this frame matches a requested frame
+        bool shouldScreenshot = hmget(args.screenshotFrames, frameCount);
 
-                takenScreenshots++;
+        if (shouldScreenshot) {
+            Screenshot_capture(args.screenshotPattern, frameCount, (int) gen8->defaultWindowWidth, (int) gen8->defaultWindowHeight);
 
-                if (takenScreenshots == args.screenshotFrameCount) {
-                    glfwSetWindowShouldClose(window, GLFW_TRUE);
-                }
+            hmdel(args.screenshotFrames, frameCount);
+
+            if (hmlen(args.screenshotFrames) == 0) {
+                // All screenshots have been taken! Bail out!!
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
         }
 
