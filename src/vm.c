@@ -1316,6 +1316,12 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     // Execute the callee
     RValue result = executeLoop(ctx);
 
+    // Make result string owning BEFORE freeing callee locals/arrays to prevent
+    // dangling pointer if the returned string points into a callee local var or array map.
+    if (result.type == RVALUE_STRING && !result.ownsString && result.string != nullptr) {
+        result = RValue_makeOwnedString(strdup(result.string));
+    }
+
     // Restore caller frame
     CallFrame* saved = ctx->callStack;
     ctx->ip = saved->savedIP;
