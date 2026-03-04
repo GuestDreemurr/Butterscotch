@@ -12,19 +12,35 @@
 
 // ===[ Stack Operations ]===
 
-static void stackPush(VMStack* stack, RValue val) {
-    require(VM_STACK_SIZE > stack->top);
-    stack->slots[stack->top++] = val;
+static bool shouldTraceStack(VMContext* ctx) {
+    if (shlen(ctx->stackToBeTraced) == 0) return false;
+    return shgeti(ctx->stackToBeTraced, "*") != -1 || shgeti(ctx->stackToBeTraced, ctx->currentCodeName) != -1;
 }
 
-static RValue stackPop(VMStack* stack) {
-    require(stack->top > 0);
-    return stack->slots[--stack->top];
+static void stackPush(VMContext* ctx, RValue val) {
+    require(VM_STACK_SIZE > ctx->stack.top);
+    if (shouldTraceStack(ctx)) {
+        char* valStr = RValue_toStringFancy(val);
+        printf("VM: [%s] PUSH %s [stack=%d -> %d]\n", ctx->currentCodeName, valStr, ctx->stack.top, ctx->stack.top + 1);
+        free(valStr);
+    }
+    ctx->stack.slots[ctx->stack.top++] = val;
 }
 
-static RValue* stackPeek(VMStack* stack) {
-    require(stack->top > 0);
-    return &stack->slots[stack->top - 1];
+static RValue stackPop(VMContext* ctx) {
+    require(ctx->stack.top > 0);
+    RValue val = ctx->stack.slots[--ctx->stack.top];
+    if (shouldTraceStack(ctx)) {
+        char* valStr = RValue_toStringFancy(val);
+        printf("VM: [%s] POP  %s [stack=%d -> %d]\n", ctx->currentCodeName, valStr, ctx->stack.top + 1, ctx->stack.top);
+        free(valStr);
+    }
+    return val;
+}
+
+static RValue* stackPeek(VMContext* ctx) {
+    require(ctx->stack.top > 0);
+    return &ctx->stack.slots[ctx->stack.top - 1];
 }
 
 // ===[ Instruction Decoding ]===
@@ -243,17 +259,17 @@ static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
     uint8_t varType = (varRef >> 24) & 0xFF;
     if (varType == VARTYPE_ARRAY) {
         // For array reads, GMS pushes: instanceType then arrayIndex (arrayIndex on top)
-        RValue indexVal = stackPop(&ctx->stack);
+        RValue indexVal = stackPop(ctx);
         int32_t arrayIndex = RValue_toInt32(indexVal);
         RValue_free(&indexVal);
 
-        RValue instTypeVal = stackPop(&ctx->stack);
+        RValue instTypeVal = stackPop(ctx);
         RValue_free(&instTypeVal);
 
         return (ArrayAccess){ .arrayIndex = arrayIndex, .isArray = true };
     }
     if (varType == VARTYPE_STACKTOP) {
-        RValue stacktop = stackPop(&ctx->stack);
+        RValue stacktop = stackPop(ctx);
         RValue_free(&stacktop);
         return (ArrayAccess){ .arrayIndex = -1, .isArray = true };
     }
@@ -482,36 +498,36 @@ static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
 
     switch (type1) {
         case GML_TYPE_DOUBLE:
-            stackPush(&ctx->stack, RValue_makeReal(readFloat64(extraData)));
+            stackPush(ctx,RValue_makeReal(readFloat64(extraData)));
             break;
         case GML_TYPE_FLOAT:
-            stackPush(&ctx->stack, RValue_makeReal((double) readFloat32(extraData)));
+            stackPush(ctx,RValue_makeReal((double) readFloat32(extraData)));
             break;
         case GML_TYPE_INT32:
-            stackPush(&ctx->stack, RValue_makeInt32(readInt32(extraData)));
+            stackPush(ctx,RValue_makeInt32(readInt32(extraData)));
             break;
         case GML_TYPE_INT64:
-            stackPush(&ctx->stack, RValue_makeInt64(readInt64(extraData)));
+            stackPush(ctx,RValue_makeInt64(readInt64(extraData)));
             break;
         case GML_TYPE_BOOL:
-            stackPush(&ctx->stack, RValue_makeBool(readInt32(extraData) != 0));
+            stackPush(ctx,RValue_makeBool(readInt32(extraData) != 0));
             break;
         case GML_TYPE_VARIABLE: {
             int16_t instanceType = instrInstanceType(instr);
             uint32_t varRef = resolveVarOperand(ctx, extraData);
             RValue val = resolveVariableRead(ctx, instanceType, varRef);
-            stackPush(&ctx->stack, val);
+            stackPush(ctx,val);
             break;
         }
         case GML_TYPE_STRING: {
             int32_t stringIndex = readInt32(extraData);
             require(stringIndex >= 0 && ctx->dataWin->strg.count > (uint32_t) stringIndex);
-            stackPush(&ctx->stack, RValue_makeString(ctx->dataWin->strg.strings[stringIndex]));
+            stackPush(ctx,RValue_makeString(ctx->dataWin->strg.strings[stringIndex]));
             break;
         }
         case GML_TYPE_INT16: {
             int16_t value = (int16_t) (instr & 0xFFFF);
-            stackPush(&ctx->stack, RValue_makeInt32((int32_t) value));
+            stackPush(ctx,RValue_makeInt32((int32_t) value));
             break;
         }
         default:
@@ -544,7 +560,7 @@ static void handlePushScoped(VMContext* ctx, uint32_t instr, const uint8_t* extr
             free(rvalueAsString);
         }
     }
-    stackPush(&ctx->stack, val);
+    stackPush(ctx,val);
 }
 
 static void handlePushLoc(VMContext* ctx, uint32_t instr, const uint8_t* extraData) {
@@ -563,12 +579,12 @@ static void handlePushBltn(VMContext* ctx, uint32_t instr, const uint8_t* extraD
     ArrayAccess access = popArrayAccess(ctx, varRef);
 
     RValue val = VMBuiltins_getVariable(ctx, varDef->name, access.arrayIndex);
-    stackPush(&ctx->stack, val);
+    stackPush(ctx,val);
 }
 
 static void handlePushI(VMContext* ctx, uint32_t instr) {
     int16_t value = (int16_t) (instr & 0xFFFF);
-    stackPush(&ctx->stack, RValue_makeInt32((int32_t) value));
+    stackPush(ctx,RValue_makeInt32((int32_t) value));
 }
 
 static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) {
@@ -583,17 +599,17 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
 
     if (varType == VARTYPE_ARRAY) {
         // For array writes, GMS pushes: value, instanceType, arrayIndex (arrayIndex on top)
-        RValue arrayIdxVal = stackPop(&ctx->stack);
+        RValue arrayIdxVal = stackPop(ctx);
         arrayIndex = RValue_toInt32(arrayIdxVal);
         RValue_free(&arrayIdxVal);
 
-        RValue instTypeVal = stackPop(&ctx->stack);
+        RValue instTypeVal = stackPop(ctx);
         instanceType = (int16_t) RValue_toInt32(instTypeVal);
         RValue_free(&instTypeVal);
 
-        val = stackPop(&ctx->stack);
+        val = stackPop(ctx);
     } else {
-        val = stackPop(&ctx->stack);
+        val = stackPop(ctx);
     }
 
     // Convert if source type differs from destination type
@@ -641,13 +657,13 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
 }
 
 static void handlePopz(VMContext* ctx) {
-    RValue val = stackPop(&ctx->stack);
+    RValue val = stackPop(ctx);
     RValue_free(&val);
 }
 
 static void handleAdd(VMContext* ctx) {
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
 
     if (a.type == RVALUE_STRING && b.type == RVALUE_STRING) {
         // String concatenation
@@ -660,7 +676,7 @@ static void handleAdd(VMContext* ctx) {
         memcpy(result + lenA, sb, lenB + 1);
         RValue_free(&a);
         RValue_free(&b);
-        stackPush(&ctx->stack, RValue_makeOwnedString(result));
+        stackPush(ctx,RValue_makeOwnedString(result));
     } else if (a.type == RVALUE_STRING || b.type == RVALUE_STRING) {
         // String + Number: convert both to strings and concatenate (GMS behavior)
         char* sa = RValue_toString(a);
@@ -674,27 +690,27 @@ static void handleAdd(VMContext* ctx) {
         free(sb);
         RValue_free(&a);
         RValue_free(&b);
-        stackPush(&ctx->stack, RValue_makeOwnedString(result));
+        stackPush(ctx,RValue_makeOwnedString(result));
     } else {
         double result = RValue_toReal(a) + RValue_toReal(b);
         RValue_free(&a);
         RValue_free(&b);
-        stackPush(&ctx->stack, RValue_makeReal(result));
+        stackPush(ctx,RValue_makeReal(result));
     }
 }
 
 static void handleSub(VMContext* ctx) {
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
     double result = RValue_toReal(a) - RValue_toReal(b);
     RValue_free(&a);
     RValue_free(&b);
-    stackPush(&ctx->stack, RValue_makeReal(result));
+    stackPush(ctx,RValue_makeReal(result));
 }
 
 static void handleMul(VMContext* ctx) {
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
 
     if (a.type == RVALUE_STRING) {
         // String * Number = string repetition
@@ -704,7 +720,7 @@ static void handleMul(VMContext* ctx) {
         if (count <= 0 || len == 0) {
             RValue_free(&a);
             RValue_free(&b);
-            stackPush(&ctx->stack, RValue_makeOwnedString(strdup("")));
+            stackPush(ctx,RValue_makeOwnedString(strdup("")));
         } else {
             char* result = malloc(len * count + 1);
             repeat(count, i) {
@@ -713,19 +729,19 @@ static void handleMul(VMContext* ctx) {
             result[len * count] = '\0';
             RValue_free(&a);
             RValue_free(&b);
-            stackPush(&ctx->stack, RValue_makeOwnedString(result));
+            stackPush(ctx,RValue_makeOwnedString(result));
         }
     } else {
         double result = RValue_toReal(a) * RValue_toReal(b);
         RValue_free(&a);
         RValue_free(&b);
-        stackPush(&ctx->stack, RValue_makeReal(result));
+        stackPush(ctx,RValue_makeReal(result));
     }
 }
 
 static void handleDiv(VMContext* ctx) {
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
     double divisor = RValue_toReal(b);
     if (divisor == 0.0) {
         fprintf(stderr, "VM: DoDiv :: Divide by zero\n");
@@ -734,12 +750,12 @@ static void handleDiv(VMContext* ctx) {
     double result = RValue_toReal(a) / divisor;
     RValue_free(&a);
     RValue_free(&b);
-    stackPush(&ctx->stack, RValue_makeReal(result));
+    stackPush(ctx,RValue_makeReal(result));
 }
 
 static void handleRem(VMContext* ctx) {
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
     int32_t ib = RValue_toInt32(b);
     if (ib == 0) {
         fprintf(stderr, "VM: DoRem :: Divide by zero\n");
@@ -748,12 +764,12 @@ static void handleRem(VMContext* ctx) {
     int32_t result = RValue_toInt32(a) % ib;
     RValue_free(&a);
     RValue_free(&b);
-    stackPush(&ctx->stack, RValue_makeInt32(result));
+    stackPush(ctx,RValue_makeInt32(result));
 }
 
 static void handleMod(VMContext* ctx) {
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
     double divisor = RValue_toReal(b);
     if (divisor == 0.0) {
         fprintf(stderr, "VM: DoMod :: Divide by zero\n");
@@ -762,16 +778,16 @@ static void handleMod(VMContext* ctx) {
     double result = fmod(RValue_toReal(a), divisor);
     RValue_free(&a);
     RValue_free(&b);
-    stackPush(&ctx->stack, RValue_makeReal(result));
+    stackPush(ctx,RValue_makeReal(result));
 }
 
 #define SIMPLE_BYTECODE_BITWISE_OPERATION(op) \
-    RValue b = stackPop(&ctx->stack); \
-    RValue a = stackPop(&ctx->stack); \
+    RValue b = stackPop(ctx); \
+    RValue a = stackPop(ctx); \
     int32_t result = RValue_toInt32(a) op RValue_toInt32(b); \
     RValue_free(&a); \
     RValue_free(&b); \
-    stackPush(&ctx->stack, RValue_makeInt32(result))
+    stackPush(ctx,RValue_makeInt32(result))
 
 static void handleAnd(VMContext* ctx) {
     SIMPLE_BYTECODE_BITWISE_OPERATION(&);
@@ -786,25 +802,25 @@ static void handleXor(VMContext* ctx) {
 }
 
 static void handleNeg(VMContext* ctx) {
-    RValue a = stackPop(&ctx->stack);
+    RValue a = stackPop(ctx);
     double result = -RValue_toReal(a);
     RValue_free(&a);
-    stackPush(&ctx->stack, RValue_makeReal(result));
+    stackPush(ctx,RValue_makeReal(result));
 }
 
 static void handleNot(VMContext* ctx, uint32_t instr) {
-    RValue a = stackPop(&ctx->stack);
+    RValue a = stackPop(ctx);
     uint8_t type1 = instrType1(instr);
     if (GML_TYPE_BOOL == type1) {
         // Logical NOT: compiler emits this for the ! operator on boolean expressions
         int32_t result = (RValue_toInt32(a) == 0) ? 1 : 0;
         RValue_free(&a);
-        stackPush(&ctx->stack, RValue_makeBool(result != 0));
+        stackPush(ctx,RValue_makeBool(result != 0));
     } else {
         // Bitwise NOT: used for ~ operator on integer types
         int32_t result = ~RValue_toInt32(a);
         RValue_free(&a);
-        stackPush(&ctx->stack, RValue_makeInt32(result));
+        stackPush(ctx,RValue_makeInt32(result));
     }
 }
 
@@ -820,7 +836,7 @@ static void handleConv(VMContext* ctx, uint32_t instr) {
     uint8_t srcType = instrType1(instr);
     uint8_t dstType = instrType2(instr);
 
-    RValue val = stackPop(&ctx->stack);
+    RValue val = stackPop(ctx);
 
     uint8_t convKey = (dstType << 4) | srcType;
     RValue result;
@@ -905,13 +921,13 @@ static void handleConv(VMContext* ctx, uint32_t instr) {
         RValue_free(&val);
     }
 
-    stackPush(&ctx->stack, result);
+    stackPush(ctx,result);
 }
 
 static void handleCmp(VMContext* ctx, uint32_t instr) {
     uint8_t cmpKind = instrCmpKind(instr);
-    RValue b = stackPop(&ctx->stack);
-    RValue a = stackPop(&ctx->stack);
+    RValue b = stackPop(ctx);
+    RValue a = stackPop(ctx);
 
     bool result;
     if (a.type == RVALUE_STRING && b.type == RVALUE_STRING) {
@@ -941,12 +957,12 @@ static void handleCmp(VMContext* ctx, uint32_t instr) {
 
     RValue_free(&a);
     RValue_free(&b);
-    stackPush(&ctx->stack, RValue_makeBool(result));
+    stackPush(ctx,RValue_makeBool(result));
 }
 
 static void handleDup(VMContext* ctx, uint32_t instr) {
     (void) instr;
-    RValue* top = stackPeek(&ctx->stack);
+    RValue* top = stackPeek(ctx);
     RValue copy = *top;
 
     // If the value owns a string, duplicate it to avoid double-free
@@ -954,7 +970,7 @@ static void handleDup(VMContext* ctx, uint32_t instr) {
         copy.string = strdup(copy.string);
     }
 
-    stackPush(&ctx->stack, copy);
+    stackPush(ctx,copy);
 }
 
 static void handleBranch(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
@@ -963,7 +979,7 @@ static void handleBranch(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
 }
 
 static void handleBranchTrue(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
-    RValue val = stackPop(&ctx->stack);
+    RValue val = stackPop(ctx);
     bool condition = RValue_toInt32(val) != 0;
     RValue_free(&val);
     if (condition) {
@@ -973,7 +989,7 @@ static void handleBranchTrue(VMContext* ctx, uint32_t instr, uint32_t instrAddr)
 }
 
 static void handleBranchFalse(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
-    RValue val = stackPop(&ctx->stack);
+    RValue val = stackPop(ctx);
     bool condition = RValue_toInt32(val) != 0;
     RValue_free(&val);
     if (!condition) {
@@ -996,7 +1012,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
     if (argCount > 0) {
         args = malloc(argCount * sizeof(RValue));
         repeat(argCount, i) {
-            args[i] = stackPop(&ctx->stack);
+            args[i] = stackPop(ctx);
         }
     }
 
@@ -1041,7 +1057,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
             free(functionArgumentList);
         }
 
-        stackPush(&ctx->stack, result);
+        stackPush(ctx,result);
         return;
     }
 
@@ -1066,7 +1082,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
             }
             free(args);
         }
-        stackPush(&ctx->stack, RValue_makeUndefined());
+        stackPush(ctx,RValue_makeUndefined());
         return;
     }
 
@@ -1089,7 +1105,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
     }
 
     // Push return value
-    stackPush(&ctx->stack, result);
+    stackPush(ctx,result);
 }
 
 // ===[ Execution Loop ]===
@@ -1232,7 +1248,7 @@ static RValue executeLoop(VMContext* ctx) {
 
             // Return
             case OP_RET: {
-                RValue retVal = stackPop(&ctx->stack);
+                RValue retVal = stackPop(ctx);
                 return retVal;
             }
 
@@ -1532,6 +1548,7 @@ void VM_free(VMContext* ctx) {
     shfree(ctx->instanceLifecyclesToBeTraced);
     shfree(ctx->eventsToBeTraced);
     shfree(ctx->opcodesToBeTraced);
+    shfree(ctx->stackToBeTraced);
     hmfree(ctx->varRefMap);
     hmfree(ctx->funcRefMap);
 
