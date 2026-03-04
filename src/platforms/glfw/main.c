@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "runner_keyboard.h"
 #include "runner.h"
 #include "stb_ds.h"
 #include "stb_image_write.h"
@@ -183,6 +184,62 @@ static void captureScreenshot(const char* filenamePattern, int frameNumber, int 
     printf("Screenshot saved: %s\n", filename);
 }
 
+// ===[ KEYBOARD INPUT ]===
+
+static int32_t glfwKeyToGml(int glfwKey) {
+    // Letters: GLFW_KEY_A (65) -> 65 (same as GML)
+    if (glfwKey >= GLFW_KEY_A && glfwKey <= GLFW_KEY_Z) return glfwKey;
+    // Numbers: GLFW_KEY_0 (48) -> 48
+    if (glfwKey >= GLFW_KEY_0 && glfwKey <= GLFW_KEY_9) return glfwKey;
+    // Special keys need mapping
+    switch (glfwKey) {
+        case GLFW_KEY_ESCAPE:        return VK_ESCAPE;
+        case GLFW_KEY_ENTER:         return VK_ENTER;
+        case GLFW_KEY_TAB:           return VK_TAB;
+        case GLFW_KEY_BACKSPACE:     return VK_BACKSPACE;
+        case GLFW_KEY_SPACE:         return VK_SPACE;
+        case GLFW_KEY_LEFT_SHIFT:
+        case GLFW_KEY_RIGHT_SHIFT:   return VK_SHIFT;
+        case GLFW_KEY_LEFT_CONTROL:
+        case GLFW_KEY_RIGHT_CONTROL: return VK_CONTROL;
+        case GLFW_KEY_LEFT_ALT:
+        case GLFW_KEY_RIGHT_ALT:     return VK_ALT;
+        case GLFW_KEY_UP:            return VK_UP;
+        case GLFW_KEY_DOWN:          return VK_DOWN;
+        case GLFW_KEY_LEFT:          return VK_LEFT;
+        case GLFW_KEY_RIGHT:         return VK_RIGHT;
+        case GLFW_KEY_F1:            return VK_F1;
+        case GLFW_KEY_F2:            return VK_F2;
+        case GLFW_KEY_F3:            return VK_F3;
+        case GLFW_KEY_F4:            return VK_F4;
+        case GLFW_KEY_F5:            return VK_F5;
+        case GLFW_KEY_F6:            return VK_F6;
+        case GLFW_KEY_F7:            return VK_F7;
+        case GLFW_KEY_F8:            return VK_F8;
+        case GLFW_KEY_F9:            return VK_F9;
+        case GLFW_KEY_F10:           return VK_F10;
+        case GLFW_KEY_F11:           return VK_F11;
+        case GLFW_KEY_F12:           return VK_F12;
+        case GLFW_KEY_INSERT:        return VK_INSERT;
+        case GLFW_KEY_DELETE:        return VK_DELETE;
+        case GLFW_KEY_HOME:          return VK_HOME;
+        case GLFW_KEY_END:           return VK_END;
+        case GLFW_KEY_PAGE_UP:       return VK_PAGEUP;
+        case GLFW_KEY_PAGE_DOWN:     return VK_PAGEDOWN;
+        default:                     return -1; // Unknown
+    }
+}
+
+static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    (void) scancode; (void) mods;
+    Runner* runner = (Runner*) glfwGetWindowUserPointer(window);
+    int32_t gmlKey = glfwKeyToGml(key);
+    if (0 > gmlKey) return;
+    if (action == GLFW_PRESS) RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
+    else if (action == GLFW_RELEASE) RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
+    // GLFW_REPEAT is ignored (GML doesn't use key repeat)
+}
+
 // ===[ MAIN ]===
 int main(int argc, char* argv[]) {
     CommandLineArgs args;
@@ -283,15 +340,23 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Set up keyboard input
+    glfwSetWindowUserPointer(window, runner);
+    glfwSetKeyCallback(window, keyCallback);
+
     // Initialize the first room and fire Game Start / Room Start events
     Runner_initFirstRoom(runner);
 
     // Main loop
     while (!glfwWindowShouldClose(window)) {
+        // Clear last frame's pressed/released state, then poll new input events
+        RunnerKeyboard_beginFrame(runner->keyboard);
+        glfwPollEvents();
+
         if (args.traceFrames)
             printf("Frame %d (Start)\n", runner->frameCount);
 
-        // Run one game step (Begin Step, Step, End Step, room transitions)
+        // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
         Runner_step(runner);
 
         Room* activeRoom = runner->currentRoom;
@@ -322,7 +387,6 @@ int main(int argc, char* argv[]) {
             printf("Frame %d (End)\n", runner->frameCount);
 
         glfwSwapBuffers(window);
-        glfwPollEvents();
     }
 
     // Cleanup

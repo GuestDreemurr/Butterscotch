@@ -195,6 +195,12 @@ RValue VMBuiltins_getVariable(VMContext* ctx, const char* name, int32_t arrayInd
         return RValue_makeUndefined();
     }
 
+    // Keyboard variables
+    if (runner != nullptr) {
+        if (strcmp(name, "keyboard_key") == 0) return RValue_makeReal((double) runner->keyboard->lastKey);
+        if (strcmp(name, "keyboard_lastkey") == 0) return RValue_makeReal((double) runner->keyboard->lastKey);
+    }
+
     // Surfaces
     if (strcmp(name, "application_surface") == 0) return RValue_makeReal(-1.0); // sentinel ID for the application surface
 
@@ -234,6 +240,16 @@ void VMBuiltins_setVariable(VMContext* ctx, const char* name, RValue val, int32_
             }
             return;
         }
+    }
+
+    // Keyboard variables
+    if (strcmp(name, "keyboard_key") == 0) {
+        runner->keyboard->lastKey = RValue_toInt32(val);
+        return;
+    }
+    if (strcmp(name, "keyboard_lastkey") == 0) {
+        runner->keyboard->lastKey = RValue_toInt32(val);
+        return;
     }
 
     // View properties
@@ -1079,14 +1095,56 @@ static RValue builtinFileTextReadReal(VMContext* ctx, RValue* args, int32_t argC
     return RValue_makeReal(0.0);
 }
 
-// Keyboard stubs
-STUB_RETURN_ZERO(keyboard_check)
-STUB_RETURN_ZERO(keyboard_check_pressed)
-STUB_RETURN_ZERO(keyboard_check_released)
-STUB_RETURN_ZERO(keyboard_check_direct)
-STUB_RETURN_UNDEFINED(keyboard_key_press)
-STUB_RETURN_UNDEFINED(keyboard_key_release)
-STUB_RETURN_UNDEFINED(keyboard_clear)
+// Keyboard functions
+static RValue builtinKeyboardCheck(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeBool(false);
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t key = RValue_toInt32(args[0]);
+    return RValue_makeBool(RunnerKeyboard_check(runner->keyboard, key));
+}
+
+static RValue builtinKeyboardCheckPressed(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeBool(false);
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t key = RValue_toInt32(args[0]);
+    return RValue_makeBool(RunnerKeyboard_checkPressed(runner->keyboard, key));
+}
+
+static RValue builtinKeyboardCheckReleased(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeBool(false);
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t key = RValue_toInt32(args[0]);
+    return RValue_makeBool(RunnerKeyboard_checkReleased(runner->keyboard, key));
+}
+
+static RValue builtinKeyboardCheckDirect(VMContext* ctx, RValue* args, int32_t argCount) {
+    // keyboard_check_direct is the same as keyboard_check for our purposes
+    return builtinKeyboardCheck(ctx, args, argCount);
+}
+
+static RValue builtinKeyboardKeyPress(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t key = RValue_toInt32(args[0]);
+    RunnerKeyboard_simulatePress(runner->keyboard, key);
+    return RValue_makeUndefined();
+}
+
+static RValue builtinKeyboardKeyRelease(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t key = RValue_toInt32(args[0]);
+    RunnerKeyboard_simulateRelease(runner->keyboard, key);
+    return RValue_makeUndefined();
+}
+
+static RValue builtinKeyboardClear(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t key = RValue_toInt32(args[0]);
+    RunnerKeyboard_clear(runner->keyboard, key);
+    return RValue_makeUndefined();
+}
 
 // Joystick stubs
 STUB_RETURN_ZERO(joystick_exists)
@@ -1488,13 +1546,13 @@ void VMBuiltins_registerAll(void) {
     registerBuiltin("file_text_read_real", builtinFileTextReadReal);
 
     // Keyboard
-    registerBuiltin("keyboard_check", builtin_keyboard_check);
-    registerBuiltin("keyboard_check_pressed", builtin_keyboard_check_pressed);
-    registerBuiltin("keyboard_check_released", builtin_keyboard_check_released);
-    registerBuiltin("keyboard_check_direct", builtin_keyboard_check_direct);
-    registerBuiltin("keyboard_key_press", builtin_keyboard_key_press);
-    registerBuiltin("keyboard_key_release", builtin_keyboard_key_release);
-    registerBuiltin("keyboard_clear", builtin_keyboard_clear);
+    registerBuiltin("keyboard_check", builtinKeyboardCheck);
+    registerBuiltin("keyboard_check_pressed", builtinKeyboardCheckPressed);
+    registerBuiltin("keyboard_check_released", builtinKeyboardCheckReleased);
+    registerBuiltin("keyboard_check_direct", builtinKeyboardCheckDirect);
+    registerBuiltin("keyboard_key_press", builtinKeyboardKeyPress);
+    registerBuiltin("keyboard_key_release", builtinKeyboardKeyRelease);
+    registerBuiltin("keyboard_clear", builtinKeyboardClear);
 
     // Joystick
     registerBuiltin("joystick_exists", builtin_joystick_exists);

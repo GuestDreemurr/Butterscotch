@@ -103,6 +103,7 @@ static const char* getEventName(int32_t eventType, int32_t eventSubtype) {
                 case DRAW_POST:      return "DrawPost";
                 default:             return "Draw";
             }
+        case EVENT_KEYBOARD:   return "Keyboard";
         case EVENT_OTHER:
             switch (eventSubtype) {
                 case OTHER_GAME_START: return "GameStart";
@@ -110,6 +111,8 @@ static const char* getEventName(int32_t eventType, int32_t eventSubtype) {
                 case OTHER_ROOM_END:   return "RoomEnd";
                 default:               return "Other";
             }
+        case EVENT_KEYPRESS:   return "KeyPress";
+        case EVENT_KEYRELEASE: return "KeyRelease";
         default: return "Unknown";
     }
 }
@@ -318,6 +321,7 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm) {
     runner->currentRoomIndex = -1;
     runner->currentRoomOrderPosition = -1;
     runner->nextInstanceId = dataWin->gen8.lastObj + 1;
+    runner->keyboard = RunnerKeyboard_create();
 
     // Link runner to VM context
     vm->runner = (struct Runner*) runner;
@@ -386,6 +390,24 @@ void Runner_initFirstRoom(Runner* runner) {
 void Runner_step(Runner* runner) {
     // Execute Begin Step for all instances
     Runner_executeEventForAll(runner, EVENT_STEP, STEP_BEGIN);
+
+    // Dispatch keyboard events
+    RunnerKeyboardState* kb = runner->keyboard;
+    for (int32_t key = 0; GML_KEY_COUNT > key; key++) {
+        if (kb->keyPressed[key]) {
+            Runner_executeEventForAll(runner, EVENT_KEYPRESS, key);
+        }
+    }
+    for (int32_t key = 0; GML_KEY_COUNT > key; key++) {
+        if (kb->keyDown[key]) {
+            Runner_executeEventForAll(runner, EVENT_KEYBOARD, key);
+        }
+    }
+    for (int32_t key = 0; GML_KEY_COUNT > key; key++) {
+        if (kb->keyReleased[key]) {
+            Runner_executeEventForAll(runner, EVENT_KEYRELEASE, key);
+        }
+    }
 
     // Process alarms for all instances
     int32_t alarmCount = (int32_t) arrlen(runner->instances);
@@ -458,5 +480,6 @@ void Runner_free(Runner* runner) {
     }
     arrfree(runner->instances);
 
+    RunnerKeyboard_free(runner->keyboard);
     free(runner);
 }

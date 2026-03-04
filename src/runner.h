@@ -2,15 +2,19 @@
 
 #include "data_win.h"
 #include "instance.h"
+#include "runner_keyboard.h"
 #include "vm.h"
 
 // ===[ Event Type Constants ]===
-#define EVENT_CREATE  0
-#define EVENT_DESTROY 1
-#define EVENT_ALARM   2
-#define EVENT_STEP    3
-#define EVENT_OTHER   7
-#define EVENT_DRAW    8
+#define EVENT_CREATE     0
+#define EVENT_DESTROY    1
+#define EVENT_ALARM      2
+#define EVENT_STEP       3
+#define EVENT_KEYBOARD   5
+#define EVENT_OTHER      7
+#define EVENT_DRAW       8
+#define EVENT_KEYPRESS   9
+#define EVENT_KEYRELEASE 10
 
 // ===[ Step Sub-event Constants ]===
 #define STEP_NORMAL 0
@@ -43,6 +47,7 @@ typedef struct Runner {
     bool gameStartFired;
     int frameCount;
     uint32_t nextInstanceId;
+    RunnerKeyboardState* keyboard;
 } Runner;
 
 Runner* Runner_create(DataWin* dataWin, VMContext* vm);
