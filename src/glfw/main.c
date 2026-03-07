@@ -568,9 +568,13 @@ int main(int argc, char* argv[]) {
             if (shouldStep) fprintf(stderr, "Debug: Frame advance (frame %d)\n", runner->frameCount);
         }
 
+        double frameStartTime = 0;
+
         if (shouldStep) {
-            if (args.traceFrames)
+            if (args.traceFrames) {
+                frameStartTime = glfwGetTime();
                 fprintf(stderr, "Frame %d (Start)\n", runner->frameCount);
+            }
 
             // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
             Runner_step(runner);
@@ -665,8 +669,10 @@ int main(int argc, char* argv[]) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
-        if (shouldStep && args.traceFrames)
-            fprintf(stderr, "Frame %d (End)\n", runner->frameCount);
+        if (shouldStep && args.traceFrames) {
+            double frameElapsedMs = (glfwGetTime() - frameStartTime) * 1000.0;
+            fprintf(stderr, "Frame %d (End, %.2f ms)\n", runner->frameCount, frameElapsedMs);
+        }
 
         glfwSwapBuffers(window);
 
