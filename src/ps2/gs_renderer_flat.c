@@ -1,4 +1,4 @@
-#include "gs_renderer.h"
+#include "gs_renderer_flat.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -6,12 +6,31 @@
 
 #include "utils.h"
 #include "text_utils.h"
-#include <gsTexture.h>
+
+// ===[ Color Generation ]===
+// Generates a unique color for each tpagIndex so sprites are visually distinguishable.
+// Uses a simple hash to spread colors across the RGB space.
+static u64 colorForTpagIndex(int32_t tpagIndex, float alpha) {
+    // Golden ratio hash for good color distribution
+    uint32_t hash = (uint32_t) tpagIndex * 2654435761u;
+    uint8_t r = (uint8_t) ((hash >> 0) & 0xFF);
+    uint8_t g = (uint8_t) ((hash >> 8) & 0xFF);
+    uint8_t b = (uint8_t) ((hash >> 16) & 0xFF);
+
+    // Ensure colors are never too dark (min brightness ~100)
+    if (128 > r + g + b) {
+        r = (uint8_t) (r | 0x80);
+        g = (uint8_t) (g | 0x40);
+    }
+
+    uint8_t a = (uint8_t) (alpha * 128.0f);
+    return GS_SETREG_RGBAQ(r, g, b, a, 0x00);
+}
 
 // ===[ Vtable Implementations ]===
 
 static void gsInit(Renderer* renderer, DataWin* dataWin) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
 
     renderer->dataWin = dataWin;
     renderer->drawColor = 0xFFFFFF;
@@ -26,28 +45,26 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
     // Set alpha blend equation: (Cs - Cd) * As / 128 + Cd (standard src-over blend)
     gsKit_set_primalpha(gs->gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
 
-    printf("GsRenderer: initialized with %u sprites, %u TPAG items\n",
-           dataWin->sprt.count, dataWin->tpag.count);
+    printf("GsRendererFlat: initialized (colored quads mode, no textures)\n");
+    printf("GsRendererFlat: %u sprites, %u TPAG items\n", dataWin->sprt.count, dataWin->tpag.count);
 }
 
 static void gsDestroy(Renderer* renderer) {
-    GsRenderer* gs = (GsRenderer*) renderer;
-    GsTextureCache_free(gs->textureCache);
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
     free(gs);
 }
 
 static void gsBeginFrame(Renderer* renderer, [[maybe_unused]] int32_t gameW, [[maybe_unused]] int32_t gameH, [[maybe_unused]] int32_t windowW, [[maybe_unused]] int32_t windowH) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
     gs->zCounter = 1;
-    GsTextureCache_beginFrame(gs->textureCache);
 }
 
 static void gsEndFrame([[maybe_unused]] Renderer* renderer) {
     // No-op: flip happens in main loop
 }
 
-static void gsBeginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH, [[maybe_unused]] int32_t portX, [[maybe_unused]] int32_t portY, [[maybe_unused]] int32_t portW, [[maybe_unused]] int32_t portH, [[maybe_unused]] float viewAngle) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+static void gsBeginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH, [[maybe_unused]] int32_t portX, [[maybe_unused]] int32_t portY, int32_t portW, int32_t portH, [[maybe_unused]] float viewAngle) {
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
     gs->viewX = viewX;
     gs->viewY = viewY;
 
@@ -71,8 +88,8 @@ static void gsEndView([[maybe_unused]] Renderer* renderer) {
     // No-op
 }
 
-static void gsDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, [[maybe_unused]] float angleDeg, uint32_t color, float alpha) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+static void gsDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, [[maybe_unused]] float angleDeg, [[maybe_unused]] uint32_t color, float alpha) {
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
     DataWin* dw = renderer->dataWin;
 
     if (0 > tpagIndex || (uint32_t) tpagIndex >= dw->tpag.count) return;
@@ -99,47 +116,15 @@ static void gsDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y
     float sx2 = gameX2 * gs->scaleX + gs->offsetX;
     float sy2 = gameY2 * gs->scaleY + gs->offsetY;
 
-    GSTEXTURE* tex = GsTextureCache_get(gs->textureCache, tpagIndex);
-    if (tex == nullptr) {
-        // Fallback: colored rectangle
-        uint8_t r = BGR_R(color);
-        uint8_t g = BGR_G(color);
-        uint8_t b = BGR_B(color);
-        uint8_t a = (uint8_t) (alpha * 128.0f);
-        u64 fallbackColor = GS_SETREG_RGBAQ(r, g, b, a, 0x00);
-        gsKit_prim_sprite(gs->gsGlobal, sx1, sy1, sx2, sy2, gs->zCounter, fallbackColor);
-        gs->zCounter++;
-        return;
-    }
-
-    // Color modulation: GS multiplies vertex color with texture color.
-    // For indexed textures the palette already has correct colors,
-    // so we use 0x80 (half, which maps to 1.0 after the GS doubles it).
-    // Apply the draw color as BGR->RGB tint.
-    uint8_t r = BGR_R(color);
-    uint8_t g = BGR_G(color);
-    uint8_t b = BGR_B(color);
-    // Scale from 0-255 to 0-128 (GS color range)
-    r = (uint8_t) ((uint32_t) r * 128 / 255);
-    g = (uint8_t) ((uint32_t) g * 128 / 255);
-    b = (uint8_t) ((uint32_t) b * 128 / 255);
-    uint8_t a = (uint8_t) (alpha * 128.0f);
-    u64 texColor = GS_SETREG_RGBAQ(r, g, b, a, 0x00);
-
-    gsKit_prim_sprite_texture(gs->gsGlobal, tex,
-        sx1, sy1, 0.0f, 0.0f,
-        sx2, sy2, w, h,
-        gs->zCounter, texColor);
+    u64 quadColor = colorForTpagIndex(tpagIndex, alpha);
+    gsKit_prim_sprite(gs->gsGlobal, sx1, sy1, sx2, sy2, gs->zCounter, quadColor);
     gs->zCounter++;
 }
 
-static void gsDrawSpritePart(Renderer* renderer, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW, int32_t srcH, float x, float y, float xscale, float yscale, uint32_t color, float alpha) {
-    GsRenderer* gs = (GsRenderer*) renderer;
-    DataWin* dw = renderer->dataWin;
+static void gsDrawSpritePart(Renderer* renderer, int32_t tpagIndex, [[maybe_unused]] int32_t srcOffX, [[maybe_unused]] int32_t srcOffY, int32_t srcW, int32_t srcH, float x, float y, float xscale, float yscale, [[maybe_unused]] uint32_t color, float alpha) {
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
 
-    if (0 > tpagIndex || (uint32_t) tpagIndex >= dw->tpag.count) return;
-
-    TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
+    if (0 > tpagIndex || (uint32_t) tpagIndex >= renderer->dataWin->tpag.count) return;
 
     // Compute screen rect
     float gameX1 = x - (float) gs->viewX;
@@ -152,44 +137,13 @@ static void gsDrawSpritePart(Renderer* renderer, int32_t tpagIndex, int32_t srcO
     float sx2 = gameX2 * gs->scaleX + gs->offsetX;
     float sy2 = gameY2 * gs->scaleY + gs->offsetY;
 
-    GSTEXTURE* tex = GsTextureCache_get(gs->textureCache, tpagIndex);
-    if (tex == nullptr) {
-        uint8_t r = BGR_R(color);
-        uint8_t g = BGR_G(color);
-        uint8_t b = BGR_B(color);
-        uint8_t a = (uint8_t) (alpha * 128.0f);
-        u64 fallbackColor = GS_SETREG_RGBAQ(r, g, b, a, 0x00);
-        gsKit_prim_sprite(gs->gsGlobal, sx1, sy1, sx2, sy2, gs->zCounter, fallbackColor);
-        gs->zCounter++;
-        return;
-    }
-
-    // The BTX image has content placed at (targetX, targetY) within the bounding rect.
-    // srcOffX/srcOffY are content-relative (already adjusted by the shared helper in renderer.h),
-    // so we add targetX/targetY to get pixel coords in the BTX image.
-    float u0 = (float) (tpag->targetX + srcOffX);
-    float v0 = (float) (tpag->targetY + srcOffY);
-    float u1 = u0 + (float) srcW;
-    float v1 = v0 + (float) srcH;
-
-    uint8_t r = BGR_R(color);
-    uint8_t g = BGR_G(color);
-    uint8_t b = BGR_B(color);
-    r = (uint8_t) ((uint32_t) r * 128 / 255);
-    g = (uint8_t) ((uint32_t) g * 128 / 255);
-    b = (uint8_t) ((uint32_t) b * 128 / 255);
-    uint8_t a = (uint8_t) (alpha * 128.0f);
-    u64 texColor = GS_SETREG_RGBAQ(r, g, b, a, 0x00);
-
-    gsKit_prim_sprite_texture(gs->gsGlobal, tex,
-        sx1, sy1, u0, v0,
-        sx2, sy2, u1, v1,
-        gs->zCounter, texColor);
+    u64 quadColor = colorForTpagIndex(tpagIndex, alpha);
+    gsKit_prim_sprite(gs->gsGlobal, sx1, sy1, sx2, sy2, gs->zCounter, quadColor);
     gs->zCounter++;
 }
 
 static void gsDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, [[maybe_unused]] bool outline) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
 
     // BGR to RGB
     uint8_t r = BGR_R(color);
@@ -208,7 +162,7 @@ static void gsDrawRectangle(Renderer* renderer, float x1, float y1, float x2, fl
 }
 
 static void gsDrawLine(Renderer* renderer, float x1, float y1, float x2, float y2, [[maybe_unused]] float width, uint32_t color, float alpha) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
 
     uint8_t r = BGR_R(color);
     uint8_t g = BGR_G(color);
@@ -226,21 +180,12 @@ static void gsDrawLine(Renderer* renderer, float x1, float y1, float x2, float y
 }
 
 static void gsDrawText(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, [[maybe_unused]] float angleDeg) {
-    GsRenderer* gs = (GsRenderer*) renderer;
+    GsRendererFlat* gs = (GsRendererFlat*) renderer;
     DataWin* dw = renderer->dataWin;
 
     if (0 > renderer->drawFont || (uint32_t) renderer->drawFont >= dw->font.count) return;
 
     Font* font = &dw->font.fonts[renderer->drawFont];
-
-    // Resolve font TPAG and load texture
-    int32_t fontTpagIndex = DataWin_resolveTPAG(dw, font->textureOffset);
-    TexturePageItem* fontTpag = nullptr;
-    GSTEXTURE* fontTex = nullptr;
-    if (fontTpagIndex >= 0) {
-        fontTpag = &dw->tpag.items[fontTpagIndex];
-        fontTex = GsTextureCache_get(gs->textureCache, fontTpagIndex);
-    }
 
     // BGR to RGB for text color
     uint32_t color = renderer->drawColor;
@@ -282,7 +227,7 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
 
         float cursorX = halignOffset;
 
-        // Draw each glyph
+        // Draw each glyph as a colored rectangle
         int32_t pos = 0;
         while (lineLen > pos) {
             uint16_t ch = TextUtils_decodeUtf8(line, lineLen, &pos);
@@ -301,22 +246,7 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
                 float sx2 = (glyphX + glyphW - (float) gs->viewX) * gs->scaleX + gs->offsetX;
                 float sy2 = (glyphY + glyphH - (float) gs->viewY) * gs->scaleY + gs->offsetY;
 
-                if (fontTex != nullptr && fontTpag != nullptr) {
-                    // Compute UVs: glyph sourceX/sourceY are relative to TPAG content,
-                    // add targetX/targetY for BTX image pixel coords
-                    float u0 = (float) (fontTpag->targetX + glyph->sourceX);
-                    float v0 = (float) (fontTpag->targetY + glyph->sourceY);
-                    float u1 = u0 + (float) glyph->sourceWidth;
-                    float v1 = v0 + (float) glyph->sourceHeight;
-
-                    gsKit_prim_sprite_texture(gs->gsGlobal, fontTex,
-                        sx1, sy1, u0, v0,
-                        sx2, sy2, u1, v1,
-                        gs->zCounter, textColor);
-                } else {
-                    // Fallback: colored rectangle
-                    gsKit_prim_sprite(gs->gsGlobal, sx1, sy1, sx2, sy2, gs->zCounter, textColor);
-                }
+                gsKit_prim_sprite(gs->gsGlobal, sx1, sy1, sx2, sy2, gs->zCounter, textColor);
             }
 
             cursorX += (float) glyph->shift;
@@ -349,7 +279,7 @@ static void gsFlush([[maybe_unused]] Renderer* renderer) {
 }
 
 static int32_t gsCreateSpriteFromSurface([[maybe_unused]] Renderer* renderer, [[maybe_unused]] int32_t x, [[maybe_unused]] int32_t y, [[maybe_unused]] int32_t w, [[maybe_unused]] int32_t h, [[maybe_unused]] bool removeback, [[maybe_unused]] bool smooth, [[maybe_unused]] int32_t xorig, [[maybe_unused]] int32_t yorig) {
-    fprintf(stderr, "GsRenderer: createSpriteFromSurface not supported on PS2\n");
+    fprintf(stderr, "GsRendererFlat: createSpriteFromSurface not supported on PS2\n");
     return -1;
 }
 
@@ -376,11 +306,10 @@ static RendererVtable gsVtable = {
     .deleteSprite = gsDeleteSprite,
 };
 
-Renderer* GsRenderer_create(GSGLOBAL* gsGlobal, GsTextureCache* textureCache) {
-    GsRenderer* gs = safeCalloc(1, sizeof(GsRenderer));
+Renderer* GsRendererFlat_create(GSGLOBAL* gsGlobal) {
+    GsRendererFlat* gs = safeCalloc(1, sizeof(GsRendererFlat));
     gs->base.vtable = &gsVtable;
     gs->gsGlobal = gsGlobal;
-    gs->textureCache = textureCache;
     gs->scaleX = 2.0f;
     gs->scaleY = 2.0f;
     gs->zCounter = 1;

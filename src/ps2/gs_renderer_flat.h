@@ -1,16 +1,15 @@
 #pragma once
 
 #include "renderer.h"
-#include "gs_texture_cache.h"
 #include <gsKit.h>
 
-// ===[ GsRenderer Struct ]===
-// PS2 renderer using gsKit ONE SHOT mode with BTX texture support.
+// ===[ GsRendererFlat Struct ]===
+// Simple PS2 renderer using gsKit ONE SHOT mode.
+// Renders all sprites/text as colored rectangles (no textures).
 typedef struct {
     Renderer base; // Must be first field for struct embedding
 
     GSGLOBAL* gsGlobal;
-    GsTextureCache* textureCache;
 
     // View transform state (set each view in beginView)
     float scaleX;
@@ -22,6 +21,6 @@ typedef struct {
 
     // Z counter for depth ordering (gsKit uses Z for draw order)
     uint16_t zCounter;
-} GsRenderer;
+} GsRendererFlat;
 
-Renderer* GsRenderer_create(GSGLOBAL* gsGlobal, GsTextureCache* textureCache);
+Renderer* GsRendererFlat_create(GSGLOBAL* gsGlobal);

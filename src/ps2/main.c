@@ -15,6 +15,7 @@
 #include "vm.h"
 #include "../data_win.h"
 #include "gs_renderer.h"
+#include "gs_texture_cache.h"
 #include "utils.h"
 
 // The maximum memory of a normal PS2 console
@@ -76,7 +77,7 @@ int main(int argc, char* argv[]) {
 
     printf("Controller initialized\n");
 
-    const char* dataWinPath = "host:data.win";
+    const char* dataWinPath = "mass:data.win";
     if (argc > 1) {
         dataWinPath = argv[1];
     }
@@ -144,8 +145,11 @@ int main(int argc, char* argv[]) {
         struct mallinfo mi = mallinfo();
         printf("Memory after data.win parsing: used=%d bytes (%.1f KB), total=%d bytes (%.1f KB), free=%d bytes (%.1f KB)\n", mi.uordblks, mi.uordblks / 1024.0f, MAX_MEMORY_BYTES, MAX_MEMORY_BYTES / 1024.0f, MAX_MEMORY_BYTES - mi.uordblks, (MAX_MEMORY_BYTES - mi.uordblks) / 1024.0f);
     }
-    // ===[ Create renderer and runner ]===
-    Renderer* renderer = GsRenderer_create(gsGlobal);
+    // ===[ Create texture cache and renderer ]===
+    // Save VRAM pointer after FONTM upload so the texture cache starts after it
+    uint32_t vramBase = gsGlobal->CurrentPointer;
+    GsTextureCache* textureCache = GsTextureCache_create(gsGlobal, vramBase, dataWin);
+    Renderer* renderer = GsRenderer_create(gsGlobal, textureCache);
 
     VMContext* vm = VM_create(dataWin);
     Runner* runner = Runner_create(dataWin, vm);
@@ -176,7 +180,7 @@ int main(int argc, char* argv[]) {
         u64 frameStartTime = GetTimerSystemTime();
 
         struct mallinfo mi = mallinfo();
-        printf("Memory: used=%d bytes (%.1f KB), total=%d bytes (%.1f KB), free=%d bytes (%.1f KB)\n", mi.uordblks, mi.uordblks / 1024.0f, MAX_MEMORY_BYTES, MAX_MEMORY_BYTES / 1024.0f, MAX_MEMORY_BYTES - mi.uordblks, (MAX_MEMORY_BYTES - mi.uordblks) / 1024.0f);
+        // printf("Memory: used=%d bytes (%.1f KB), total=%d bytes (%.1f KB), free=%d bytes (%.1f KB)\n", mi.uordblks, mi.uordblks / 1024.0f, MAX_MEMORY_BYTES, MAX_MEMORY_BYTES / 1024.0f, MAX_MEMORY_BYTES - mi.uordblks, (MAX_MEMORY_BYTES - mi.uordblks) / 1024.0f);
 
         // ===[ Poll Controller ]===
         RunnerKeyboard_beginFrame(runner->keyboard);
