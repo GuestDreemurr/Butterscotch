@@ -3630,8 +3630,8 @@ static RValue builtinStringHashToNewline([[maybe_unused]] VMContext* ctx, RValue
     if (1 > argCount) return RValue_makeString(""); 
     char* str = RValue_toString(args[0]); 
     int32_t len = (int32_t) strlen(str); 
-    char *result = malloc((len + 1)*sizeof(char)); 
-    for(int i = 0; i < len; i++) { 
+    char *result = malloc((len + 1) * sizeof(char));
+    repeat(len, i) {
         char cur = str[i]; 
         if(cur == '#') 
             cur = '\n'; 
@@ -3639,7 +3639,8 @@ static RValue builtinStringHashToNewline([[maybe_unused]] VMContext* ctx, RValue
     }
     result[len] = '\0';
     free(str); 
-    return RValue_makeOwnedString(result); }
+    return RValue_makeOwnedString(result);
+}
 
 // json_decode
 // TODO: This is hardcoded for deltarune, for some reason the args string isn't working properly
@@ -3656,14 +3657,9 @@ static RValue builtinJsonDecode(VMContext* ctx, [[maybe_unused]] RValue* args, i
     char* content = fs->vtable->readFileText(fs, "lang/lang_en.json");
     const JsonValue* json = JsonReader_parse(content);
 
-    for(int i = 0; i < JsonReader_objectLength(json); i++)
-    {
+    repeat(JsonReader_objectLength(json), i) {
         const char *key = JsonReader_getObjectKey(json, i);
-        RValue val = RValue_makeOwnedString(
-            (char*)JsonReader_getString(
-                JsonReader_getObjectValue(json, i)
-            )
-        );
+        RValue val = RValue_makeOwnedString((char*)JsonReader_getString(JsonReader_getObjectValue(json, i)));
         shput(*mapPtr, key, val);
     }
 
